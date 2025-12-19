@@ -20,7 +20,26 @@ import { NodeType, CustomNode, NodeData } from './types';
 import CustomNodeComponent from './components/CustomNode';
 import EditorPanel from './components/EditorPanel';
 import NodeLibrary from './components/NodeLibrary';
-import { Play, Share2, Save, MoreVertical, Github, Zap, Undo2, Redo2, FolderOpen, Trash2, Clock } from 'lucide-react';
+import { 
+  Play, 
+  Share2, 
+  Save, 
+  MoreVertical, 
+  Github, 
+  Zap, 
+  Undo2, 
+  Redo2, 
+  FolderOpen, 
+  Trash2, 
+  Clock, 
+  Edit2, 
+  Check,
+  Download,
+  Settings,
+  ToggleLeft,
+  ToggleRight,
+  AlertCircle
+} from 'lucide-react';
 import { runGeminiTask } from './services/geminiService';
 
 const nodeTypes = {
@@ -35,29 +54,43 @@ interface HistoryState {
 interface SavedWorkflow {
   id: string;
   name: string;
+  version: number;
   nodes: CustomNode[];
   edges: Edge[];
   timestamp: number;
 }
 
 const STORAGE_KEY = 'n8n-clone-storage';
+const DRAFT_KEY = 'n8n-clone-draft';
+const SETTINGS_KEY = 'n8n-clone-settings';
 
 const App: React.FC = () => {
   const [nodes, setNodes] = useState<CustomNode[]>(INITIAL_NODES as CustomNode[]);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+  const [workflowName, setWorkflowName] = useState('Gemini Story Generator');
+  const [isRenaming, setIsRenaming] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isLoadMenuOpen, setIsLoadMenuOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
   
+  // Settings State
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const [autoSaveInterval, setAutoSaveInterval] = useState(30); // seconds
+  const [lastAutoSave, setLastAutoSave] = useState<number | null>(null);
+
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
+  const workflowNameRef = useRef(workflowName);
 
   useEffect(() => {
     nodesRef.current = nodes;
     edgesRef.current = edges;
-  }, [nodes, edges]);
+    workflowNameRef.current = workflowName;
+  }, [nodes, edges, workflowName]);
 
+  // Initial Load
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
@@ -67,7 +100,54 @@ const App: React.FC = () => {
         console.error("Failed to parse saved workflows", e);
       }
     }
+
+    const storedSettings = localStorage.getItem(SETTINGS_KEY);
+    if (storedSettings) {
+      try {
+        const s = JSON.parse(storedSettings);
+        setAutoSaveEnabled(s.autoSaveEnabled ?? true);
+        setAutoSaveInterval(s.autoSaveInterval ?? 30);
+      } catch (e) {
+        console.error("Failed to parse settings", e);
+      }
+    }
+
+    const draft = localStorage.getItem(DRAFT_KEY);
+    if (draft) {
+      try {
+        const d = JSON.parse(draft);
+        setNodes(d.nodes);
+        setEdges(d.edges);
+        setWorkflowName(d.name || 'Untitled Workflow');
+      } catch (e) {
+        console.error("Failed to load draft", e);
+      }
+    }
   }, []);
+
+  // Save Settings
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ autoSaveEnabled, autoSaveInterval }));
+  }, [autoSaveEnabled, autoSaveInterval]);
+
+  // Auto-Save Logic
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+
+    const interval = setInterval(() => {
+      const draftData = {
+        name: workflowNameRef.current,
+        nodes: nodesRef.current,
+        edges: edgesRef.current,
+        timestamp: Date.now()
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draftData));
+      setLastAutoSave(Date.now());
+      console.log("Auto-saved draft at", new Date().toLocaleTimeString());
+    }, autoSaveInterval * 1000);
+
+    return () => clearInterval(interval);
+  }, [autoSaveEnabled, autoSaveInterval]);
 
   const [past, setPast] = useState<HistoryState[]>([]);
   const [future, setFuture] = useState<HistoryState[]>([]);
@@ -106,6 +186,9 @@ const App: React.FC = () => {
       } else if ((event.ctrlKey || event.metaKey) && event.key === 's') {
         event.preventDefault();
         saveWorkflow();
+      } else if ((event.ctrlKey || event.metaKey) && event.key === 'e') {
+        event.preventDefault();
+        exportWorkflow();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -149,6 +232,7 @@ const App: React.FC = () => {
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
     setIsLoadMenuOpen(false);
+    setIsSettingsOpen(false);
   }, []);
 
   const handleUpdateNodeConfig = useCallback((id: string, config: Record<string, any>) => {
@@ -178,25 +262,82 @@ const App: React.FC = () => {
   }, [takeSnapshot]);
 
   const saveWorkflow = useCallback(() => {
-    const name = window.prompt("Enter a name for this workflow:", `Workflow ${new Date().toLocaleTimeString()}`);
+    const name = window.prompt("Enter a name for this workflow:", workflowName);
     if (!name) return;
-    const newWorkflow: SavedWorkflow = {
-      id: `wf-${Date.now()}`,
-      name,
+    
+    setWorkflowName(name);
+
+    const existingWorkflowsWithName = savedWorkflows.filter(wf => wf.name === name);
+    let updatedWorkflows = [...savedWorkflows];
+
+    if (existingWorkflowsWithName.length > 0) {
+      const confirmOverwrite = window.confirm(
+        `A workflow with the name "${name}" already exists.\n\n` +
+        `Click [OK] to OVERWRITE the latest version.\n` +
+        `Click [Cancel] to create a NEW version.`
+      );
+
+      if (confirmOverwrite) {
+        const latestWf = existingWorkflowsWithName.reduce((prev, current) => 
+          (prev.version > current.version) ? prev : current
+        );
+        updatedWorkflows = updatedWorkflows.map(wf => 
+          wf.id === latestWf.id 
+            ? { ...wf, nodes: nodesRef.current, edges: edgesRef.current, timestamp: Date.now() } 
+            : wf
+        );
+      } else {
+        const maxVersion = Math.max(...existingWorkflowsWithName.map(wf => wf.version));
+        const newWorkflow: SavedWorkflow = {
+          id: `wf-${Date.now()}`,
+          name,
+          version: maxVersion + 1,
+          nodes: nodesRef.current,
+          edges: edgesRef.current,
+          timestamp: Date.now(),
+        };
+        updatedWorkflows = [newWorkflow, ...updatedWorkflows];
+      }
+    } else {
+      const newWorkflow: SavedWorkflow = {
+        id: `wf-${Date.now()}`,
+        name,
+        version: 1,
+        nodes: nodesRef.current,
+        edges: edgesRef.current,
+        timestamp: Date.now(),
+      };
+      updatedWorkflows = [newWorkflow, ...updatedWorkflows];
+    }
+
+    setSavedWorkflows(updatedWorkflows);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedWorkflows));
+    alert("Workflow saved successfully!");
+  }, [savedWorkflows, workflowName]);
+
+  const exportWorkflow = useCallback(() => {
+    const data = {
+      name: workflowName,
       nodes: nodesRef.current,
       edges: edgesRef.current,
-      timestamp: Date.now(),
+      exportedAt: new Date().toISOString()
     };
-    const updated = [newWorkflow, ...savedWorkflows];
-    setSavedWorkflows(updated);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    alert("Workflow saved successfully!");
-  }, [savedWorkflows]);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${workflowName.replace(/\s+/g, '_')}_workflow.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [workflowName]);
 
   const loadWorkflow = useCallback((wf: SavedWorkflow) => {
     takeSnapshot();
     setNodes(wf.nodes);
     setEdges(wf.edges);
+    setWorkflowName(wf.name);
     setIsLoadMenuOpen(false);
   }, [takeSnapshot]);
 
@@ -259,7 +400,7 @@ const App: React.FC = () => {
             else if (op === 'equals') isTrue = val === target;
             
             branchToFollow = isTrue ? 'true' : 'false';
-            result = inputData; // Pass input along
+            result = inputData;
             break;
           default:
             result = "No action defined";
@@ -273,17 +414,13 @@ const App: React.FC = () => {
 
     if (success) {
       setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'success', lastResult: result } } : n));
-      
       const nextEdges = edgesRef.current.filter(e => e.source === node.id);
-      
       for (const edge of nextEdges) {
-        // Handle branching for conditional node
         if (node.data.type === NodeType.CONDITIONAL) {
           if (edge.sourceHandle === branchToFollow) {
             await executeNode(edge.target, result);
           }
         } else {
-          // Standard node, follow all output edges
           await executeNode(edge.target, result);
         }
       }
@@ -352,9 +489,42 @@ const App: React.FC = () => {
               <h1 className="font-bold text-lg tracking-tight">n8n Clone <span className="text-blue-500">AI</span></h1>
             </div>
             <div className="h-6 w-px bg-slate-200 mx-2" />
-            <div className="flex flex-col">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest leading-none">Workflow</span>
-              <span className="text-sm font-medium text-slate-700 leading-tight">Gemini Story Generator</span>
+            <div 
+              className="flex flex-col group cursor-pointer"
+              onClick={() => !isRenaming && setIsRenaming(true)}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest leading-none">Workflow</span>
+                {autoSaveEnabled && lastAutoSave && (
+                  <span className="text-[10px] text-green-500 font-medium opacity-0 group-hover:opacity-100 transition-opacity">
+                    • Auto-saved {new Date(lastAutoSave).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                {isRenaming ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      autoFocus
+                      type="text"
+                      className="text-sm font-medium text-slate-700 leading-tight border-b border-blue-400 bg-transparent focus:outline-none w-48 py-0 px-0"
+                      value={workflowName}
+                      onChange={(e) => setWorkflowName(e.target.value)}
+                      onBlur={() => setIsRenaming(false)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') setIsRenaming(false);
+                        if (e.key === 'Escape') setIsRenaming(false);
+                      }}
+                    />
+                    <Check className="w-3.5 h-3.5 text-green-500 shrink-0" onClick={(e) => { e.stopPropagation(); setIsRenaming(false); }} />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 min-w-[150px]">
+                    <span className="text-sm font-medium text-slate-700 leading-tight">{workflowName}</span>
+                    <Edit2 className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -380,7 +550,7 @@ const App: React.FC = () => {
 
             <div className="relative">
               <button 
-                onClick={() => setIsLoadMenuOpen(!isLoadMenuOpen)}
+                onClick={() => { setIsLoadMenuOpen(!isLoadMenuOpen); setIsSettingsOpen(false); }}
                 className={`p-2 rounded-lg transition-all border ${isLoadMenuOpen ? 'bg-slate-100 border-slate-300 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 border-transparent'}`}
                 title="Open Saved Workflows"
               >
@@ -388,7 +558,7 @@ const App: React.FC = () => {
               </button>
               
               {isLoadMenuOpen && (
-                <div className="absolute top-full right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[400px]">
+                <div className="absolute top-full right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[400px]">
                   <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Saved Workflows</span>
                     <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">{savedWorkflows.length}</span>
@@ -407,7 +577,10 @@ const App: React.FC = () => {
                           className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-none flex flex-col group transition-colors"
                         >
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-700 group-hover:text-blue-600 truncate mr-2">{wf.name}</span>
+                            <div className="flex items-center gap-2 truncate mr-2">
+                              <span className="text-sm font-semibold text-slate-700 group-hover:text-blue-600 truncate">{wf.name}</span>
+                              <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded font-bold">v{wf.version}</span>
+                            </div>
                             <button 
                               onClick={(e) => deleteSavedWorkflow(wf.id, e)}
                               className="p-1 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
@@ -415,9 +588,11 @@ const App: React.FC = () => {
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            <span className="text-[10px] text-slate-400">{new Date(wf.timestamp).toLocaleString()}</span>
+                          <div className="flex items-center gap-3 mt-1">
+                            <div className="flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <span className="text-[10px] text-slate-400">{new Date(wf.timestamp).toLocaleString()}</span>
+                            </div>
                           </div>
                         </div>
                       ))
@@ -426,6 +601,70 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
+
+            <div className="relative">
+              <button 
+                onClick={() => { setIsSettingsOpen(!isSettingsOpen); setIsLoadMenuOpen(false); }}
+                className={`p-2 rounded-lg transition-all border ${isSettingsOpen ? 'bg-slate-100 border-slate-300 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 border-transparent'}`}
+                title="Settings"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
+              
+              {isSettingsOpen && (
+                <div className="absolute top-full right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
+                  <div className="p-3 border-b border-slate-100 bg-slate-50/50">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Application Settings</span>
+                  </div>
+                  <div className="p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-700">Auto-save Draft</span>
+                        <span className="text-[10px] text-slate-400">Save progress automatically</span>
+                      </div>
+                      <button 
+                        onClick={() => setAutoSaveEnabled(!autoSaveEnabled)}
+                        className={`transition-colors ${autoSaveEnabled ? 'text-blue-600' : 'text-slate-300'}`}
+                      >
+                        {autoSaveEnabled ? <ToggleRight className="w-8 h-8" /> : <ToggleLeft className="w-8 h-8" />}
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Interval (seconds)</label>
+                        <span className="text-xs font-bold text-blue-600">{autoSaveInterval}s</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="5" 
+                        max="300" 
+                        step="5"
+                        value={autoSaveInterval} 
+                        onChange={(e) => setAutoSaveInterval(parseInt(e.target.value))}
+                        className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        disabled={!autoSaveEnabled}
+                      />
+                    </div>
+
+                    <div className="p-2 bg-blue-50 rounded-lg flex gap-2">
+                      <AlertCircle className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
+                      <p className="text-[10px] text-blue-700 leading-normal">
+                        Drafts are stored in your browser's local storage and restored automatically.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button 
+              onClick={exportWorkflow}
+              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all border border-transparent hover:border-slate-200"
+              title="Export Workflow as JSON"
+            >
+              <Download className="w-5 h-5" />
+            </button>
 
             <button 
               onClick={saveWorkflow}
@@ -452,7 +691,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="flex-1 bg-slate-50" onClick={() => setIsLoadMenuOpen(false)}>
+        <div className="flex-1 bg-slate-50" onClick={onPaneClick}>
           <ReactFlowProvider>
             <ReactFlow
               nodes={nodes}
