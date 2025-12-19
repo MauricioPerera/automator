@@ -39,7 +39,13 @@ import {
   ToggleLeft,
   ToggleRight,
   AlertCircle,
-  ShieldAlert
+  ShieldAlert,
+  FilePlus,
+  Copy,
+  CheckCircle,
+  X,
+  // Added missing Info icon import
+  Info
 } from 'lucide-react';
 import { runGeminiTask } from './services/geminiService';
 
@@ -61,6 +67,12 @@ interface SavedWorkflow {
   timestamp: number;
 }
 
+interface Toast {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
 const STORAGE_KEY = 'n8n-clone-storage';
 const DRAFT_KEY = 'n8n-clone-draft';
 const SETTINGS_KEY = 'n8n-clone-settings';
@@ -69,6 +81,7 @@ const App: React.FC = () => {
   const [nodes, setNodes] = useState<CustomNode[]>(INITIAL_NODES as CustomNode[]);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [workflowName, setWorkflowName] = useState('Gemini Story Generator');
+  const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -76,6 +89,7 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   
   // Settings State
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
@@ -91,6 +105,14 @@ const App: React.FC = () => {
     edgesRef.current = edges;
     workflowNameRef.current = workflowName;
   }, [nodes, edges, workflowName]);
+
+  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
 
   // Initial Load
   useEffect(() => {
@@ -121,6 +143,7 @@ const App: React.FC = () => {
         setNodes(d.nodes);
         setEdges(d.edges);
         setWorkflowName(d.name || 'Untitled Workflow');
+        if (d.id) setCurrentWorkflowId(d.id);
       } catch (e) {
         console.error("Failed to load draft", e);
       }
@@ -138,6 +161,7 @@ const App: React.FC = () => {
 
     const interval = setInterval(() => {
       const draftData = {
+        id: currentWorkflowId,
         name: workflowNameRef.current,
         nodes: nodesRef.current,
         edges: edgesRef.current,
@@ -148,7 +172,7 @@ const App: React.FC = () => {
     }, autoSaveInterval * 1000);
 
     return () => clearInterval(interval);
-  }, [autoSaveEnabled, autoSaveInterval]);
+  }, [autoSaveEnabled, autoSaveInterval, currentWorkflowId]);
 
   const [past, setPast] = useState<HistoryState[]>([]);
   const [future, setFuture] = useState<HistoryState[]>([]);
@@ -211,18 +235,14 @@ const App: React.FC = () => {
     const targetNode = nodesRef.current.find((n) => n.id === connection.target);
 
     if (!sourceNode || !targetNode) return false;
-
-    // Rule 1: No self-loops
     if (sourceNode.id === targetNode.id) return false;
 
-    // Rule 2: Trigger nodes cannot be targets
     if (targetNode.data.type === NodeType.TRIGGER) {
       setValidationError("Trigger nodes cannot receive inputs.");
       setTimeout(() => setValidationError(null), 3000);
       return false;
     }
 
-    // Rule 3: LOG nodes cannot be sources for AI_GENERATE nodes
     if (sourceNode.data.type === NodeType.LOG && targetNode.data.type === NodeType.AI_GENERATE) {
       setValidationError("Incompatible nodes: Log output cannot feed back into AI generation.");
       setTimeout(() => setValidationError(null), 3000);
@@ -288,46 +308,45 @@ const App: React.FC = () => {
     setSelectedNodeId(newNode.id);
   }, [takeSnapshot]);
 
-  const saveWorkflow = useCallback(() => {
-    const name = window.prompt("Enter a name for this workflow:", workflowName);
-    if (!name) return;
-    
-    setWorkflowName(name);
+  const clearCanvas = useCallback(() => {
+    if (confirm("Clear current canvas? Unsaved changes will be lost.")) {
+      setNodes([]);
+      setEdges([]);
+      setWorkflowName('Untitled Workflow');
+      setCurrentWorkflowId(null);
+      addToast("Canvas cleared", "info");
+    }
+  }, []);
 
-    const existingWorkflowsWithName = savedWorkflows.filter(wf => wf.name === name);
+  const saveWorkflow = useCallback((saveAs = false) => {
+    let name = workflowName;
+    let id = currentWorkflowId;
     let updatedWorkflows = [...savedWorkflows];
 
-    if (existingWorkflowsWithName.length > 0) {
-      const confirmOverwrite = window.confirm(
-        `A workflow with the name "${name}" already exists.\n\n` +
-        `Click [OK] to OVERWRITE the latest version.\n` +
-        `Click [Cancel] to create a NEW version.`
-      );
+    // If "Save As" or no ID exists, prompt for a name
+    if (saveAs || !id) {
+      const promptedName = window.prompt("Enter a name for this workflow:", name);
+      if (promptedName === null) return; // User cancelled
+      name = promptedName || 'Untitled Workflow';
+      setWorkflowName(name);
+      
+      // If we are saving as a NEW workflow (id becomes null)
+      if (saveAs) id = null;
+    }
 
-      if (confirmOverwrite) {
-        const latestWf = existingWorkflowsWithName.reduce((prev, current) => 
-          (prev.version > current.version) ? prev : current
-        );
-        updatedWorkflows = updatedWorkflows.map(wf => 
-          wf.id === latestWf.id 
-            ? { ...wf, nodes: nodesRef.current, edges: edgesRef.current, timestamp: Date.now() } 
-            : wf
-        );
-      } else {
-        const maxVersion = Math.max(...existingWorkflowsWithName.map(wf => wf.version));
-        const newWorkflow: SavedWorkflow = {
-          id: `wf-${Date.now()}`,
-          name,
-          version: maxVersion + 1,
-          nodes: nodesRef.current,
-          edges: edgesRef.current,
-          timestamp: Date.now(),
-        };
-        updatedWorkflows = [newWorkflow, ...updatedWorkflows];
-      }
+    if (id) {
+      // OVERWRITE EXISTING
+      updatedWorkflows = updatedWorkflows.map(wf => 
+        wf.id === id 
+          ? { ...wf, name, nodes: nodesRef.current, edges: edgesRef.current, timestamp: Date.now() } 
+          : wf
+      );
+      addToast(`Updated workflow: ${name}`);
     } else {
+      // CREATE NEW
+      const newId = `wf-${Date.now()}`;
       const newWorkflow: SavedWorkflow = {
-        id: `wf-${Date.now()}`,
+        id: newId,
         name,
         version: 1,
         nodes: nodesRef.current,
@@ -335,12 +354,13 @@ const App: React.FC = () => {
         timestamp: Date.now(),
       };
       updatedWorkflows = [newWorkflow, ...updatedWorkflows];
+      setCurrentWorkflowId(newId);
+      addToast(`Saved new workflow: ${name}`);
     }
 
     setSavedWorkflows(updatedWorkflows);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedWorkflows));
-    alert("Workflow saved successfully!");
-  }, [savedWorkflows, workflowName]);
+  }, [savedWorkflows, workflowName, currentWorkflowId]);
 
   const exportWorkflow = useCallback(() => {
     const data = {
@@ -358,6 +378,7 @@ const App: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    addToast("Workflow exported as JSON");
   }, [workflowName]);
 
   const loadWorkflow = useCallback((wf: SavedWorkflow) => {
@@ -365,15 +386,20 @@ const App: React.FC = () => {
     setNodes(wf.nodes);
     setEdges(wf.edges);
     setWorkflowName(wf.name);
+    setCurrentWorkflowId(wf.id);
     setIsLoadMenuOpen(false);
+    addToast(`Loaded workflow: ${wf.name}`, "info");
   }, [takeSnapshot]);
 
   const deleteSavedWorkflow = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this saved workflow?")) return;
     const updated = savedWorkflows.filter(wf => wf.id !== id);
     setSavedWorkflows(updated);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-  }, [savedWorkflows]);
+    if (currentWorkflowId === id) setCurrentWorkflowId(null);
+    addToast("Workflow deleted", "info");
+  }, [savedWorkflows, currentWorkflowId]);
 
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) || null, [nodes, selectedNodeId]);
 
@@ -473,15 +499,17 @@ const App: React.FC = () => {
 
     const triggerNode = nodes.find(n => n.data.type === NodeType.TRIGGER);
     if (!triggerNode) {
-      alert("No Trigger node found!");
+      addToast("No Trigger node found!", "error");
       setIsExecuting(false);
       return;
     }
 
     try {
       await executeNode(triggerNode.id, null);
+      addToast("Workflow execution completed successfully");
     } catch (err) {
       console.warn("Workflow Execution Halted:", err);
+      addToast("Workflow execution failed", "error");
     } finally {
       setIsExecuting(false);
     }
@@ -507,6 +535,33 @@ const App: React.FC = () => {
       <NodeLibrary onAddNode={addNode} />
 
       <div className="flex-1 flex flex-col relative h-full">
+        {/* Toast Notification Container */}
+        <div className="fixed bottom-12 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
+          {toasts.map(toast => (
+            <div 
+              key={toast.id} 
+              className={`
+                flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border pointer-events-auto
+                animate-in slide-in-from-right duration-300
+                ${toast.type === 'success' ? 'bg-white border-green-100 text-slate-800' : 
+                  toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 
+                  'bg-blue-50 border-blue-200 text-blue-800'}
+              `}
+            >
+              {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-green-500" />}
+              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-red-500" />}
+              {toast.type === 'info' && <Info className="w-5 h-5 text-blue-500" />}
+              <span className="text-sm font-medium">{toast.message}</span>
+              <button 
+                onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                className="ml-2 p-1 hover:bg-slate-100 rounded-full"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+
         {/* Transient Validation Error Alert */}
         {validationError && (
           <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[100] animate-bounce">
@@ -585,6 +640,14 @@ const App: React.FC = () => {
               </button>
             </div>
 
+            <button 
+              onClick={clearCanvas}
+              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all border border-transparent"
+              title="New Workflow (Clear Canvas)"
+            >
+              <FilePlus className="w-5 h-5" />
+            </button>
+
             <div className="relative">
               <button 
                 onClick={() => { setIsLoadMenuOpen(!isLoadMenuOpen); setIsSettingsOpen(false); }}
@@ -611,11 +674,11 @@ const App: React.FC = () => {
                         <div 
                           key={wf.id}
                           onClick={() => loadWorkflow(wf)}
-                          className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-none flex flex-col group transition-colors"
+                          className={`px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-none flex flex-col group transition-colors ${currentWorkflowId === wf.id ? 'bg-blue-50/50 border-l-4 border-l-blue-600' : ''}`}
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 truncate mr-2">
-                              <span className="text-sm font-semibold text-slate-700 group-hover:text-blue-600 truncate">{wf.name}</span>
+                              <span className={`text-sm font-semibold truncate ${currentWorkflowId === wf.id ? 'text-blue-700' : 'text-slate-700 group-hover:text-blue-600'}`}>{wf.name}</span>
                               <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded font-bold">v{wf.version}</span>
                             </div>
                             <button 
@@ -703,20 +766,33 @@ const App: React.FC = () => {
               <Download className="w-5 h-5" />
             </button>
 
-            <button 
-              onClick={saveWorkflow}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200"
-            >
-              <Save className="w-4 h-4" />
-              Save
-            </button>
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+              <button 
+                onClick={() => saveWorkflow(false)}
+                className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${currentWorkflowId ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:bg-white/50'}`}
+                title={currentWorkflowId ? "Quick Save (Overwrite)" : "Save Workflow"}
+              >
+                <Save className="w-3.5 h-3.5" />
+                {currentWorkflowId ? 'Save' : 'Save Workflow'}
+              </button>
+              {currentWorkflowId && (
+                <button 
+                  onClick={() => saveWorkflow(true)}
+                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-white rounded-lg transition-all ml-1"
+                  title="Save As New Workflow"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
             <button 
               onClick={executeWorkflow}
               disabled={isExecuting}
               className={`flex items-center gap-2 px-6 py-2 text-sm font-bold text-white rounded-lg transition-all shadow-md active:scale-95 ${isExecuting ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'}`}
             >
               <Play className={`w-4 h-4 fill-current ${isExecuting ? 'animate-pulse' : ''}`} />
-              {isExecuting ? 'Executing...' : 'Run Workflow'}
+              {isExecuting ? 'Executing...' : 'Run'}
             </button>
             <div className="h-6 w-px bg-slate-200 mx-2" />
             <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">

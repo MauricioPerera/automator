@@ -12,7 +12,8 @@ import {
   XCircle, 
   Loader2,
   AlertTriangle,
-  GitBranch
+  GitBranch,
+  Database
 } from 'lucide-react';
 
 const NodeTypeIcon = ({ type }: { type: NodeType }) => {
@@ -31,6 +32,9 @@ const CustomNode = ({ data, selected }: NodeProps<NodeData>) => {
   const isConditional = data.type === NodeType.CONDITIONAL;
   const isTrigger = data.type === NodeType.TRIGGER;
   
+  const hasInputSchema = !!data.config.inputSchema;
+  const hasOutputSchema = !!data.config.outputSchema;
+
   const statusConfig = {
     idle: {
       container: 'bg-white border-slate-200',
@@ -60,6 +64,22 @@ const CustomNode = ({ data, selected }: NodeProps<NodeData>) => {
       ${statusConfig.container}
       ${selected ? 'ring-2 ring-blue-500 ring-offset-2' : ''}
     `}>
+      {/* Schema Indicators */}
+      {(hasInputSchema || hasOutputSchema) && (
+        <div className="absolute -top-2 left-4 flex gap-1">
+          {hasInputSchema && (
+            <span className="px-1 py-0.5 bg-blue-600 text-[7px] text-white font-black rounded border border-white shadow-sm flex items-center gap-0.5 uppercase">
+              <Database className="w-2 h-2" /> IN
+            </span>
+          )}
+          {hasOutputSchema && (
+            <span className="px-1 py-0.5 bg-purple-600 text-[7px] text-white font-black rounded border border-white shadow-sm flex items-center gap-0.5 uppercase">
+              <Database className="w-2 h-2" /> OUT
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Hide target handle for trigger nodes */}
       {!isTrigger && (
         <Handle type="target" position={Position.Left} className="!bg-slate-400 !border-white !w-2.5 !h-2.5 !-left-[6px]" />
