@@ -8,7 +8,8 @@ import {
   Globe, 
   Terminal, 
   Search,
-  LayoutGrid
+  LayoutGrid,
+  GitBranch
 } from 'lucide-react';
 
 interface NodeLibraryProps {
@@ -19,6 +20,7 @@ const NodeLibrary: React.FC<NodeLibraryProps> = ({ onAddNode }) => {
   const nodeTypes = [
     { type: NodeType.TRIGGER, label: 'Trigger', icon: <Zap className="w-4 h-4" />, color: 'text-orange-500', bg: 'bg-orange-50' },
     { type: NodeType.AI_GENERATE, label: 'Gemini AI', icon: <Bot className="w-4 h-4" />, color: 'text-purple-500', bg: 'bg-purple-50' },
+    { type: NodeType.CONDITIONAL, label: 'Conditional', icon: <GitBranch className="w-4 h-4" />, color: 'text-amber-500', bg: 'bg-amber-50' },
     { type: NodeType.HTTP_REQUEST, label: 'HTTP Request', icon: <Globe className="w-4 h-4" />, color: 'text-blue-500', bg: 'bg-blue-50' },
     { type: NodeType.LOG, label: 'Log', icon: <Terminal className="w-4 h-4" />, color: 'text-slate-500', bg: 'bg-slate-50' },
   ];

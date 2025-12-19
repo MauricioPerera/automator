@@ -10,7 +10,7 @@ export const INITIAL_NODES = [
     data: {
       label: 'On Click',
       type: NodeType.TRIGGER,
-      config: {},
+      config: { retryCount: 0, continueOnError: 'false' },
       status: 'idle',
     },
   },
@@ -22,8 +22,10 @@ export const INITIAL_NODES = [
       label: 'Gemini AI',
       type: NodeType.AI_GENERATE,
       config: {
-        prompt: 'Generate a short creative story about a robot.',
+        prompt: 'Generate a short creative story about a robot. Previous input: {{input}}',
         model: 'gemini-3-flash-preview',
+        retryCount: 1,
+        continueOnError: 'false'
       },
       status: 'idle',
     },
@@ -35,7 +37,7 @@ export const INITIAL_NODES = [
     data: {
       label: 'Log Output',
       type: NodeType.LOG,
-      config: {},
+      config: { retryCount: 0, continueOnError: 'false' },
       status: 'idle',
     },
   },
@@ -58,20 +60,34 @@ export const INITIAL_EDGES = [
   },
 ];
 
+const ERROR_HANDLING_FIELDS: NodeConfigField[] = [
+  { id: 'retryCount', label: 'Max Retries', type: 'number', defaultValue: 0 },
+  { id: 'continueOnError', label: 'Continue on Fail', type: 'select', options: [{ label: 'No', value: 'false' }, { label: 'Yes', value: 'true' }], defaultValue: 'false' }
+];
+
 export const NODE_CONFIG_MAP: Record<NodeType, NodeConfigField[]> = {
   [NodeType.TRIGGER]: [
-    { id: 'event', label: 'Trigger Event', type: 'select', options: [{ label: 'Manual Execution', value: 'manual' }], defaultValue: 'manual' }
+    { id: 'event', label: 'Trigger Event', type: 'select', options: [{ label: 'Manual Execution', value: 'manual' }], defaultValue: 'manual' },
+    ...ERROR_HANDLING_FIELDS
   ],
   [NodeType.AI_GENERATE]: [
     { id: 'model', label: 'Model', type: 'select', options: [{ label: 'Gemini 3 Flash', value: 'gemini-3-flash-preview' }, { label: 'Gemini 3 Pro', value: 'gemini-3-pro-preview' }], defaultValue: 'gemini-3-flash-preview' },
-    { id: 'prompt', label: 'Prompt', type: 'textarea', placeholder: 'Enter your AI prompt...', defaultValue: '' }
+    { id: 'prompt', label: 'Prompt', type: 'textarea', placeholder: 'Enter your AI prompt... Use {{input}} to inject data from the previous node.', defaultValue: '' },
+    ...ERROR_HANDLING_FIELDS
   ],
   [NodeType.HTTP_REQUEST]: [
     { id: 'url', label: 'URL', type: 'text', placeholder: 'https://api.example.com', defaultValue: '' },
-    { id: 'method', label: 'Method', type: 'select', options: [{ label: 'GET', value: 'GET' }, { label: 'POST', value: 'POST' }], defaultValue: 'GET' }
+    { id: 'method', label: 'Method', type: 'select', options: [{ label: 'GET', value: 'GET' }, { label: 'POST', value: 'POST' }], defaultValue: 'GET' },
+    ...ERROR_HANDLING_FIELDS
   ],
   [NodeType.LOG]: [
-    { id: 'prefix', label: 'Log Prefix', type: 'text', placeholder: 'Result:', defaultValue: 'Result:' }
+    { id: 'prefix', label: 'Log Prefix', type: 'text', placeholder: 'Result:', defaultValue: 'Result:' },
+    ...ERROR_HANDLING_FIELDS
   ],
-  [NodeType.ACTION]: []
+  [NodeType.CONDITIONAL]: [
+    { id: 'operator', label: 'Operator', type: 'select', options: [{ label: 'Contains', value: 'contains' }, { label: 'Not Contains', value: 'not_contains' }, { label: 'Equals', value: 'equals' }], defaultValue: 'contains' },
+    { id: 'value', label: 'Value to compare', type: 'text', placeholder: 'Search for this text...', defaultValue: '' },
+    ...ERROR_HANDLING_FIELDS
+  ],
+  [NodeType.ACTION]: ERROR_HANDLING_FIELDS
 };

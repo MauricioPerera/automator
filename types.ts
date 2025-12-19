@@ -7,14 +7,16 @@ export enum NodeType {
   AI_GENERATE = 'ai_generate',
   HTTP_REQUEST = 'http_request',
   LOG = 'log',
+  CONDITIONAL = 'conditional',
 }
 
 export interface NodeData {
   label: string;
   type: NodeType;
   config: Record<string, any>;
-  status?: 'idle' | 'running' | 'success' | 'error';
+  status?: 'idle' | 'running' | 'success' | 'error' | 'warning';
   lastResult?: any;
+  errorDetails?: string;
 }
 
 export type CustomNode = Node<NodeData>;

@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import ReactFlow, { 
   addEdge, 
   Background, 
@@ -14,14 +14,13 @@ import ReactFlow, {
   MarkerType,
   OnNodesDelete,
   OnEdgesDelete,
-  Node,
 } from 'reactflow';
 import { INITIAL_NODES, INITIAL_EDGES } from './constants';
 import { NodeType, CustomNode, NodeData } from './types';
 import CustomNodeComponent from './components/CustomNode';
 import EditorPanel from './components/EditorPanel';
 import NodeLibrary from './components/NodeLibrary';
-import { Play, Share2, Save, MoreVertical, Github, Zap, Undo2, Redo2 } from 'lucide-react';
+import { Play, Share2, Save, MoreVertical, Github, Zap, Undo2, Redo2, FolderOpen, Trash2, Clock } from 'lucide-react';
 import { runGeminiTask } from './services/geminiService';
 
 const nodeTypes = {
@@ -33,59 +32,82 @@ interface HistoryState {
   edges: Edge[];
 }
 
+interface SavedWorkflow {
+  id: string;
+  name: string;
+  nodes: CustomNode[];
+  edges: Edge[];
+  timestamp: number;
+}
+
+const STORAGE_KEY = 'n8n-clone-storage';
+
 const App: React.FC = () => {
   const [nodes, setNodes] = useState<CustomNode[]>(INITIAL_NODES as CustomNode[]);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isLoadMenuOpen, setIsLoadMenuOpen] = useState(false);
+  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
+  
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
 
-  // History State
+  useEffect(() => {
+    nodesRef.current = nodes;
+    edgesRef.current = edges;
+  }, [nodes, edges]);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      try {
+        setSavedWorkflows(JSON.parse(stored));
+      } catch (e) {
+        console.error("Failed to parse saved workflows", e);
+      }
+    }
+  }, []);
+
   const [past, setPast] = useState<HistoryState[]>([]);
   const [future, setFuture] = useState<HistoryState[]>([]);
 
   const takeSnapshot = useCallback(() => {
-    setPast((prev) => [...prev, { nodes: [...nodes], edges: [...edges] }]);
+    setPast((prev) => [...prev, { nodes: [...nodesRef.current], edges: [...edgesRef.current] }]);
     setFuture([]);
-  }, [nodes, edges]);
+  }, []);
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
-
     const previous = past[past.length - 1];
     const newPast = past.slice(0, past.length - 1);
-
-    setFuture((prev) => [{ nodes: [...nodes], edges: [...edges] }, ...prev]);
+    setFuture((prev) => [{ nodes: [...nodesRef.current], edges: [...edgesRef.current] }, ...prev]);
     setNodes(previous.nodes);
     setEdges(previous.edges);
     setPast(newPast);
-  }, [past, nodes, edges]);
+  }, [past]);
 
   const redo = useCallback(() => {
     if (future.length === 0) return;
-
     const next = future[0];
     const newFuture = future.slice(1);
-
-    setPast((prev) => [...prev, { nodes: [...nodes], edges: [...edges] }]);
+    setPast((prev) => [...prev, { nodes: [...nodesRef.current], edges: [...edgesRef.current] }]);
     setNodes(next.nodes);
     setEdges(next.edges);
     setFuture(newFuture);
-  }, [future, nodes, edges]);
+  }, [future]);
 
-  // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'z') {
-        if (event.shiftKey) {
-          redo();
-        } else {
-          undo();
-        }
+        if (event.shiftKey) redo(); else undo();
       } else if ((event.ctrlKey || event.metaKey) && event.key === 'y') {
         redo();
+      } else if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+        event.preventDefault();
+        saveWorkflow();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
@@ -126,6 +148,7 @@ const App: React.FC = () => {
 
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
+    setIsLoadMenuOpen(false);
   }, []);
 
   const handleUpdateNodeConfig = useCallback((id: string, config: Record<string, any>) => {
@@ -146,7 +169,7 @@ const App: React.FC = () => {
       data: {
         label: `New ${type.replace('_', ' ')}`,
         type,
-        config: {},
+        config: { retryCount: 0, continueOnError: 'false' },
         status: 'idle',
       },
     };
@@ -154,17 +177,136 @@ const App: React.FC = () => {
     setSelectedNodeId(newNode.id);
   }, [takeSnapshot]);
 
+  const saveWorkflow = useCallback(() => {
+    const name = window.prompt("Enter a name for this workflow:", `Workflow ${new Date().toLocaleTimeString()}`);
+    if (!name) return;
+    const newWorkflow: SavedWorkflow = {
+      id: `wf-${Date.now()}`,
+      name,
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      timestamp: Date.now(),
+    };
+    const updated = [newWorkflow, ...savedWorkflows];
+    setSavedWorkflows(updated);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    alert("Workflow saved successfully!");
+  }, [savedWorkflows]);
+
+  const loadWorkflow = useCallback((wf: SavedWorkflow) => {
+    takeSnapshot();
+    setNodes(wf.nodes);
+    setEdges(wf.edges);
+    setIsLoadMenuOpen(false);
+  }, [takeSnapshot]);
+
+  const deleteSavedWorkflow = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = savedWorkflows.filter(wf => wf.id !== id);
+    setSavedWorkflows(updated);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  }, [savedWorkflows]);
+
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) || null, [nodes, selectedNodeId]);
 
-  // Workflow Execution Engine
+  const executeNode = async (nodeId: string, inputData: any) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node) return;
+
+    const maxRetries = Number(node.data.config.retryCount) || 0;
+    const continueOnError = node.data.config.continueOnError === 'true';
+    
+    let currentAttempt = 0;
+    let success = false;
+    let result = null;
+    let lastError = "";
+    let branchToFollow: string | null = null;
+
+    setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'running', errorDetails: undefined } } : n));
+
+    while (currentAttempt <= maxRetries && !success) {
+      try {
+        if (currentAttempt > 0) {
+          await new Promise(r => setTimeout(r, 1000 * currentAttempt));
+        }
+
+        switch (node.data.type) {
+          case NodeType.TRIGGER:
+            result = { triggeredAt: new Date().toISOString() };
+            break;
+          case NodeType.AI_GENERATE:
+            const rawPrompt = node.data.config.prompt || "Hello";
+            const processedPrompt = rawPrompt.replace(/\{\{input\}\}/g, typeof inputData === 'string' ? inputData : JSON.stringify(inputData));
+            const model = node.data.config.model || 'gemini-3-flash-preview';
+            result = await runGeminiTask(processedPrompt, model);
+            break;
+          case NodeType.LOG:
+            console.log(`WORKFLOW LOG [${node.data.config.prefix || 'Result'}]:`, inputData);
+            result = inputData;
+            break;
+          case NodeType.HTTP_REQUEST:
+            if (node.data.config.url?.includes('fail')) throw new Error("Mocked HTTP 500 Internal Server Error");
+            result = { status: 200, url: node.data.config.url, data: "Response Body Mocked" };
+            break;
+          case NodeType.CONDITIONAL:
+            const val = typeof inputData === 'string' ? inputData : JSON.stringify(inputData);
+            const target = node.data.config.value || "";
+            const op = node.data.config.operator || "contains";
+            
+            let isTrue = false;
+            if (op === 'contains') isTrue = val.toLowerCase().includes(target.toLowerCase());
+            else if (op === 'not_contains') isTrue = !val.toLowerCase().includes(target.toLowerCase());
+            else if (op === 'equals') isTrue = val === target;
+            
+            branchToFollow = isTrue ? 'true' : 'false';
+            result = inputData; // Pass input along
+            break;
+          default:
+            result = "No action defined";
+        }
+        success = true;
+      } catch (error) {
+        currentAttempt++;
+        lastError = error instanceof Error ? error.message : "Execution failed";
+      }
+    }
+
+    if (success) {
+      setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'success', lastResult: result } } : n));
+      
+      const nextEdges = edgesRef.current.filter(e => e.source === node.id);
+      
+      for (const edge of nextEdges) {
+        // Handle branching for conditional node
+        if (node.data.type === NodeType.CONDITIONAL) {
+          if (edge.sourceHandle === branchToFollow) {
+            await executeNode(edge.target, result);
+          }
+        } else {
+          // Standard node, follow all output edges
+          await executeNode(edge.target, result);
+        }
+      }
+    } else {
+      const finalStatus = continueOnError ? 'warning' : 'error';
+      setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: finalStatus, errorDetails: lastError } } : n));
+
+      if (continueOnError) {
+        const nextEdges = edgesRef.current.filter(e => e.source === node.id);
+        for (const edge of nextEdges) {
+          await executeNode(edge.target, { _error: lastError, _failedNode: node.id });
+        }
+      } else {
+        throw new Error(`Execution stopped at node ${node.id}`);
+      }
+    }
+  };
+
   const executeWorkflow = async () => {
     if (isExecuting) return;
     setIsExecuting(true);
+    setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, status: 'idle', lastResult: null, errorDetails: undefined } })));
 
-    // Reset status
-    setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, status: 'idle', lastResult: null } })));
-
-    // Find trigger node
     const triggerNode = nodes.find(n => n.data.type === NodeType.TRIGGER);
     if (!triggerNode) {
       alert("No Trigger node found!");
@@ -172,50 +314,25 @@ const App: React.FC = () => {
       return;
     }
 
-    const executeNode = async (node: CustomNode, inputData: any) => {
-      setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'running' } } : n));
-      
-      let result = null;
-      try {
-        switch (node.data.type) {
-          case NodeType.TRIGGER:
-            result = { triggeredAt: new Date().toISOString() };
-            break;
-          case NodeType.AI_GENERATE:
-            const prompt = node.data.config.prompt || "Hello";
-            const model = node.data.config.model || 'gemini-3-flash-preview';
-            result = await runGeminiTask(prompt, model);
-            break;
-          case NodeType.LOG:
-            console.log("WORKFLOW LOG:", inputData);
-            result = inputData;
-            break;
-          case NodeType.HTTP_REQUEST:
-            result = { status: 200, message: "Request successful (Mocked)" };
-            break;
-          default:
-            result = "No action defined";
-        }
-
-        setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'success', lastResult: result } } : n));
-        
-        const nextEdges = edges.filter(e => e.source === node.id);
-        for (const edge of nextEdges) {
-          const nextNode = nodes.find(n => n.id === edge.target);
-          if (nextNode) {
-            await executeNode(nextNode, result);
-          }
-        }
-      } catch (error) {
-        setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, status: 'error', lastResult: error instanceof Error ? error.message : "Error" } } : n));
-        throw error;
-      }
-    };
-
     try {
-      await executeNode(triggerNode, null);
+      await executeNode(triggerNode.id, null);
     } catch (err) {
-      console.error("Workflow Execution Failed", err);
+      console.warn("Workflow Execution Halted:", err);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  const handleRetryNode = async (nodeId: string) => {
+    if (isExecuting) return;
+    setIsExecuting(true);
+    try {
+      const incomingEdge = edgesRef.current.find(e => e.target === nodeId);
+      const predecessorNode = incomingEdge ? nodesRef.current.find(n => n.id === incomingEdge.source) : null;
+      const input = predecessorNode?.data.lastResult || null;
+      await executeNode(nodeId, input);
+    } catch (err) {
+      console.warn("Manual Retry Failed:", err);
     } finally {
       setIsExecuting(false);
     }
@@ -242,7 +359,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Undo/Redo Buttons */}
             <div className="flex items-center gap-1 mr-2 px-2 py-1 bg-slate-100 rounded-lg">
               <button 
                 onClick={undo}
@@ -262,7 +378,59 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200">
+            <div className="relative">
+              <button 
+                onClick={() => setIsLoadMenuOpen(!isLoadMenuOpen)}
+                className={`p-2 rounded-lg transition-all border ${isLoadMenuOpen ? 'bg-slate-100 border-slate-300 text-slate-800' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 border-transparent'}`}
+                title="Open Saved Workflows"
+              >
+                <FolderOpen className="w-5 h-5" />
+              </button>
+              
+              {isLoadMenuOpen && (
+                <div className="absolute top-full right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[400px]">
+                  <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Saved Workflows</span>
+                    <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">{savedWorkflows.length}</span>
+                  </div>
+                  <div className="overflow-y-auto flex-1 py-1">
+                    {savedWorkflows.length === 0 ? (
+                      <div className="p-8 text-center">
+                        <FolderOpen className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+                        <p className="text-xs text-slate-400 italic">No saved workflows yet</p>
+                      </div>
+                    ) : (
+                      savedWorkflows.map(wf => (
+                        <div 
+                          key={wf.id}
+                          onClick={() => loadWorkflow(wf)}
+                          className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-none flex flex-col group transition-colors"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-semibold text-slate-700 group-hover:text-blue-600 truncate mr-2">{wf.name}</span>
+                            <button 
+                              onClick={(e) => deleteSavedWorkflow(wf.id, e)}
+                              className="p-1 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span className="text-[10px] text-slate-400">{new Date(wf.timestamp).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button 
+              onClick={saveWorkflow}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200"
+            >
               <Save className="w-4 h-4" />
               Save
             </button>
@@ -284,7 +452,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="flex-1 bg-slate-50">
+        <div className="flex-1 bg-slate-50" onClick={() => setIsLoadMenuOpen(false)}>
           <ReactFlowProvider>
             <ReactFlow
               nodes={nodes}
@@ -323,6 +491,7 @@ const App: React.FC = () => {
         node={selectedNode} 
         onUpdate={handleUpdateNodeConfig} 
         onClose={() => setSelectedNodeId(null)} 
+        onRetry={handleRetryNode}
       />
     </div>
   );
