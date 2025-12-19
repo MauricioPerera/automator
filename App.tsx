@@ -38,7 +38,8 @@ import {
   Settings,
   ToggleLeft,
   ToggleRight,
-  AlertCircle
+  AlertCircle,
+  ShieldAlert
 } from 'lucide-react';
 import { runGeminiTask } from './services/geminiService';
 
@@ -74,6 +75,7 @@ const App: React.FC = () => {
   const [isLoadMenuOpen, setIsLoadMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
+  const [validationError, setValidationError] = useState<string | null>(null);
   
   // Settings State
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
@@ -143,7 +145,6 @@ const App: React.FC = () => {
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draftData));
       setLastAutoSave(Date.now());
-      console.log("Auto-saved draft at", new Date().toLocaleTimeString());
     }, autoSaveInterval * 1000);
 
     return () => clearInterval(interval);
@@ -204,6 +205,32 @@ const App: React.FC = () => {
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
+
+  const isValidConnection = useCallback((connection: Connection) => {
+    const sourceNode = nodesRef.current.find((n) => n.id === connection.source);
+    const targetNode = nodesRef.current.find((n) => n.id === connection.target);
+
+    if (!sourceNode || !targetNode) return false;
+
+    // Rule 1: No self-loops
+    if (sourceNode.id === targetNode.id) return false;
+
+    // Rule 2: Trigger nodes cannot be targets
+    if (targetNode.data.type === NodeType.TRIGGER) {
+      setValidationError("Trigger nodes cannot receive inputs.");
+      setTimeout(() => setValidationError(null), 3000);
+      return false;
+    }
+
+    // Rule 3: LOG nodes cannot be sources for AI_GENERATE nodes
+    if (sourceNode.data.type === NodeType.LOG && targetNode.data.type === NodeType.AI_GENERATE) {
+      setValidationError("Incompatible nodes: Log output cannot feed back into AI generation.");
+      setTimeout(() => setValidationError(null), 3000);
+      return false;
+    }
+
+    return true;
+  }, []);
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -480,6 +507,16 @@ const App: React.FC = () => {
       <NodeLibrary onAddNode={addNode} />
 
       <div className="flex-1 flex flex-col relative h-full">
+        {/* Transient Validation Error Alert */}
+        {validationError && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[100] animate-bounce">
+            <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-full shadow-lg">
+              <ShieldAlert className="w-4 h-4 text-amber-500" />
+              <span className="text-xs font-bold">{validationError}</span>
+            </div>
+          </div>
+        )}
+
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 z-10 shrink-0">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
@@ -705,6 +742,7 @@ const App: React.FC = () => {
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
               nodeTypes={nodeTypes}
+              isValidConnection={isValidConnection}
               fitView
             >
               <Background color="#cbd5e1" gap={20} size={1} />

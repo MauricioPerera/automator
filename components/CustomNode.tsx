@@ -29,6 +29,7 @@ const NodeTypeIcon = ({ type }: { type: NodeType }) => {
 const CustomNode = ({ data, selected }: NodeProps<NodeData>) => {
   const isRunning = data.status === 'running';
   const isConditional = data.type === NodeType.CONDITIONAL;
+  const isTrigger = data.type === NodeType.TRIGGER;
   
   const statusConfig = {
     idle: {
@@ -59,7 +60,10 @@ const CustomNode = ({ data, selected }: NodeProps<NodeData>) => {
       ${statusConfig.container}
       ${selected ? 'ring-2 ring-blue-500 ring-offset-2' : ''}
     `}>
-      <Handle type="target" position={Position.Left} className="!bg-slate-400 !border-white !w-2.5 !h-2.5 !-left-[6px]" />
+      {/* Hide target handle for trigger nodes */}
+      {!isTrigger && (
+        <Handle type="target" position={Position.Left} className="!bg-slate-400 !border-white !w-2.5 !h-2.5 !-left-[6px]" />
+      )}
       
       <div className="flex items-center gap-3">
         <div className={`p-2 rounded-lg border shadow-sm transition-colors duration-300 ${statusConfig.icon}`}>
