@@ -1,0 +1,7 @@
+{
+  "name": "n8n Clone - AI Workflow Automator",
+  "description": "A high-fidelity n8n clone built with React Flow and Gemini API for intelligent workflow automation. Create, connect, and execute nodes with real AI integration.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
